@@ -24,14 +24,14 @@ namespace ai {
 			Node* child;
 			Node* sibling;
 			uint32_t thread_id;
-			uint32_t total_value;
+			uint32_t value;
 			State state;
 
-			void award(const uint32_t value) {
+			void award(const uint32_t new_value) {
 				if (parent == nullptr)
 					return;
-				total_value += value;
-				parent->award(value);
+				value = new_value;
+				parent->award(new_value);
 			}
 
 			Node* get_first_parent() {
@@ -46,23 +46,6 @@ namespace ai {
 					return this;
 				}
 				return parent->get_first_parent();
-			}
-
-			void sanity_check() const {
-				if (parent != nullptr) {
-					bool found = false;
-					for (Node* sibling = parent->child; sibling != nullptr; sibling = sibling->sibling) {
-						if (sibling == this) {
-							found = true;
-							break;
-						}
-					}
-					if (!found) {
-						printf("Sanity check failed: Node not found in parent's child list\n");
-						std::abort();
-					}
-					parent->sanity_check();
-				}
 			}
 		};
 
@@ -90,7 +73,7 @@ namespace ai {
 				}
 				ret->child = nullptr;
 				ret->sibling = nullptr;
-				ret->total_value = 0;
+				ret->value = 0;
 				ret->parent = parent;
 				if (parent->child != nullptr) {
 					ret->sibling = parent->child;
@@ -111,7 +94,8 @@ namespace ai {
 				}
 				ret->child = nullptr;
 				ret->sibling = nullptr;
-				ret->total_value = 0;
+				ret->thread_id = 0;
+				ret->value = 0;
 				ret->parent = nullptr;
 				return ret;
 			}
@@ -124,7 +108,7 @@ namespace ai {
 			}
 
 			size_t size() const {
-				return node_storage.size();
+				return node_storage.size() - free_count;
 			}
 
 			size_t remaining() const {
@@ -138,12 +122,16 @@ namespace ai {
 			std::vector<NodeMemory> lanes;
 
 		    public:
-			bool is_limit_reached(const size_t limit) const {
+			size_t total_size() const {
 				size_t total = 0;
 				for (const auto& lane : lanes) {
 					total += lane.size();
 				}
-				return total >= limit;
+				return total;
+			}
+
+			bool is_limit_reached(const size_t limit) const {
+				return total_size() >= limit;
 			}
 
 			// check if some memory lane actually has high memory usage, probably unneeded
@@ -204,7 +192,7 @@ namespace ai {
 
 		struct NodePruneCompare {
 			static bool operator()(const Node* left, const Node* right) {
-				return left->total_value > right->total_value;
+				return left->value > right->value;
 			}
 		};
 
@@ -214,6 +202,7 @@ namespace ai {
 			size_t node_limit = 100000;  // soft limit, will continue allocating until can_release returns true
 			size_t prune_width = 1;
 			size_t award_width = 25;
+			size_t beam_width = 5;
 		};
 
 		struct OutgoingDepthTasks {
@@ -224,18 +213,6 @@ namespace ai {
 		struct ThreadTasks {
 			std::vector<OutgoingDepthTasks> tasks;
 			size_t thread_id;
-
-			ThreadTasks& operator=(ThreadTasks&& other) {
-				tasks = std::move(other.tasks);
-				thread_id = other.thread_id;
-				return *this;
-			}
-
-			ThreadTasks(ThreadTasks&& other) {
-				*this = std::move(other);
-			}
-
-			ThreadTasks() = default;
 		};
 
 		using NodePQ = PriorityQueue<NodeValue, NodeValueCompare>;
@@ -291,6 +268,15 @@ namespace ai {
 			}
 		}
 
+		DepthTasks* get_last_active_depth() {
+			for (size_t i = pending_depths.size(); i-- > 0;) {
+				if (!pending_depths[i].tasks.empty()) {
+					return &pending_depths[i];
+				}
+			}
+			return nullptr;
+		}
+
 		const DepthTasks* get_last_active_depth() const {
 			for (size_t i = pending_depths.size(); i-- > 0;) {
 				if (!pending_depths[i].tasks.empty()) {
@@ -300,8 +286,16 @@ namespace ai {
 			return nullptr;
 		}
 
-		const Node* get_best_node()const {
+		const Node* get_best_node() const {
 			const DepthTasks* last_active_depth = get_last_active_depth();
+			if (last_active_depth == nullptr) {
+				return nullptr;
+			}
+			return last_active_depth->tasks.top().node;
+		}
+
+		Node* get_best_node() {
+			DepthTasks* last_active_depth = get_last_active_depth();
 			if (last_active_depth == nullptr) {
 				return nullptr;
 			}
@@ -316,7 +310,6 @@ namespace ai {
 		Node* allocate_new_node(const size_t thread_id, Node* parent) {
 			// return lanes.allocate(thread_id, parent);
 			auto node = lanes.allocate(thread_id, parent);
-			node->sanity_check();
 			return node;
 		}
 
@@ -331,6 +324,10 @@ namespace ai {
 			}
 			bucket.push_back(node);
 			pending_depths[depth].tasks.push({node, value});
+		}
+
+		size_t get_total_node_count() const {
+			return lanes.total_size();
 		}
 
 		std::vector<ThreadTasks> get_tasks() {
@@ -425,7 +422,7 @@ namespace ai {
 
 		bool is_search_complete() const {
 			if (lanes.is_limit_reached(config.node_limit)) {
-				return false;
+				return true;
 			}
 			auto end = pending_depths.end() - 1; // last depth is finalization only
 			for (auto it = pending_depths.begin(); it != end; ++it) {
@@ -436,18 +433,12 @@ namespace ai {
 			return true;
 		}
 
-		bool is_releasable() const {
-			if (pending_depths.back().tasks.empty()) {
-				return is_search_complete();
-			}
-			return true;
-		}
-
 		void finalize() {
-			auto& last_depth_tasks = pending_depths.back().tasks;
-			if (last_depth_tasks.empty()) {
+			auto last_active_depth = get_last_active_depth();
+			if (last_active_depth == nullptr) {
 				return;
 			}
+			auto& last_depth_tasks = last_active_depth->tasks;
 			std::vector<NodeValue> top_k_nodes;
 			top_k_nodes.reserve(config.award_width);
 			while (!last_depth_tasks.empty() && top_k_nodes.size() < config.award_width) {
@@ -459,16 +450,34 @@ namespace ai {
 				nv.node->award(award_size--);
 				last_depth_tasks.push(nv);
 			}
+
+			if (config.prune_width == 0) {
+				return;
+			}
+
 			PriorityQueue<Node*, NodePruneCompare> frontier_nodes;
 			frontier_nodes.reserve(config.prune_width);
 
-			// get top k worst nodes
-			// starts at root's children
-			// condition: if root's children size <= 1, prune root's grandchildren
 			Node* cursor = root;
 			// navigate to first depth with multiple children
-			while (cursor->child != nullptr && cursor->child->sibling == nullptr) {
-				cursor = cursor->child;
+			{
+				size_t depth = 0;
+				while (cursor->child != nullptr) {
+					// count siblings
+					size_t width = 0;
+					for (Node* sibling = cursor->child; sibling != nullptr; sibling = sibling->sibling) {
+						++width;
+					}
+					if (width > config.beam_width) {
+						break;
+					}
+					cursor = cursor->child;
+					++depth;
+				}
+				if (depth == pending_depths.size() - 1) {
+					// reached last depth, nothing to prune
+					return;
+				}
 			}
 			if (cursor->child == nullptr) {
 				// no children at all, nothing to prune
@@ -480,7 +489,7 @@ namespace ai {
 			}
 
 			// prune worst nodes
-			size_t target_frontier_size = config.prune_width > frontier_nodes.size() ? 1 : config.prune_width;
+			size_t target_frontier_size = config.prune_width >= frontier_nodes.size() ? 1 : frontier_nodes.size() - config.prune_width;
 			while (frontier_nodes.size() > target_frontier_size) {
 				Node* worst_node = frontier_nodes.top();
 				frontier_nodes.pop();
@@ -502,6 +511,9 @@ namespace ai {
 		const State* get_best_state() const {
 			const Node* best_node = get_best_node();
 			if (best_node != nullptr) {
+				if (best_node->parent == nullptr) {
+					return nullptr;
+				}
 				best_node = best_node->get_first_parent();
 				return &best_node->state;
 			}
@@ -513,19 +525,17 @@ namespace ai {
 				return false;
 			}
 			// advance root to best child
-			Node* best_child = nullptr;
+			Node* best_child = get_best_node()->get_first_parent();
 			for (Node* child = root->child; child != nullptr; child = child->sibling) {
-				if (best_child == nullptr || child->total_value > best_child->total_value) {
-					if (best_child != nullptr) {
-						lanes.deallocate(best_child);
-					}
-					best_child = child;
+				if (child != best_child) {
+					lanes.deallocate(child);
 				}
 			}
 			root->child = nullptr; // important: detach best child from root to avoid double free
 			lanes.deallocate(root);
 			root = best_child;
 			root->parent = nullptr;
+			cleanup_all_depths();
 
 			// shift pending depths
 			for (size_t i = 0; i < pending_depths.size() - 1; ++i) {
