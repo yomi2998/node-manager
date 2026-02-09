@@ -134,17 +134,6 @@ namespace ai {
 				return total_size() >= limit;
 			}
 
-			// check if some memory lane actually has high memory usage, probably unneeded
-			size_t check_memory_min_max_diff() const {
-				size_t min = std::numeric_limits<size_t>::max();
-				size_t max = std::numeric_limits<size_t>::min();
-				for (const auto& lane : lanes) {
-					min = std::min(lane.size(), min);
-					max = std::max(lane.size(), max);
-				}
-				return max - min;
-			}
-
 			std::vector<int> get_free_count() const {
 				std::vector<int> counts;
 				for (const auto& lane : lanes) {
@@ -215,7 +204,7 @@ namespace ai {
 			size_t thread_id;
 		};
 
-		using NodePQ = PriorityQueue<NodeValue, NodeValueCompare>;
+		using NodePQ = utils::PriorityQueue<NodeValue, NodeValueCompare>;
 
 		struct PREVENT_FALSE_SHARING DepthTasks {
 			NodePQ tasks;
@@ -455,7 +444,7 @@ namespace ai {
 				return;
 			}
 
-			PriorityQueue<Node*, NodePruneCompare> frontier_nodes;
+			utils::PriorityQueue<Node*, NodePruneCompare> frontier_nodes;
 			frontier_nodes.reserve(config.prune_width);
 
 			Node* cursor = root;

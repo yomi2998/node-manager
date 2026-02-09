@@ -1,7 +1,7 @@
 #pragma once
 #include <queue>
 
-namespace ai {
+namespace utils {
 	template <typename T, typename Compare>
 	class PriorityQueue : public std::priority_queue<T, std::vector<T>, Compare> {
 	    public:
