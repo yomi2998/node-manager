@@ -161,7 +161,7 @@ constexpr std::array<SudokuDecision, 9 * 9 * 9> get_all_possible_moves() {
 
 int main() {
 	constexpr int kMillisecondsPerMove = 10;
-	node::NodeManager<SudokuState> node_sudoku;
+	noir::NodeManager<SudokuState> node_sudoku;
 	node_sudoku.get_config().depth = 7;
 	node_sudoku.get_config().node_limit = 100000;
 	Random rng(12345);

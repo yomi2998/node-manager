@@ -1,7 +1,7 @@
 #pragma once
 #include <queue>
 
-namespace utils {
+namespace noir {
 	template <typename T, typename Compare>
 	class PriorityQueue : public std::priority_queue<T, std::vector<T>, Compare> {
 	    public:
@@ -31,4 +31,4 @@ namespace utils {
 			std::make_heap(this->c.begin(), this->c.end(), this->comp);
 		}
 	};
-} // namespace ai
+} // namespace noir

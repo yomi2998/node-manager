@@ -8,7 +8,7 @@
 
 #include "priority_queue.hpp"
 
-namespace node {
+namespace noir {
 	template <typename State>
 	class NodeManager {
 	    private:
@@ -107,7 +107,7 @@ namespace node {
 			}
 		};
 
-		using NodeValuePriorityQueue = utils::PriorityQueue<NodeValue, NodeValueCompare>;
+		using NodeValuePriorityQueue = PriorityQueue<NodeValue, NodeValueCompare>;
 
 		struct NodeTreeConfig {
 			size_t depth = 7;
@@ -373,4 +373,4 @@ namespace node {
 		}
 	};
 
-} // namespace node
+} // namespace noir
