@@ -1,5 +1,4 @@
-#include "node_manager_new.hpp"
-#include "thread.hpp"
+#include "node_manager.hpp"
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -34,6 +33,10 @@ struct SudokuState {
 
 	bool operator==(const SudokuState& other) const {
 		return std::memcmp(board, other.board, sizeof(board)) == 0;
+	}
+
+	bool operator!=(const SudokuState& other) const {
+		return std::memcmp(board, other.board, sizeof(board)) != 0;
 	}
 
 	int get_column_match_count(const size_t column) const {
@@ -157,11 +160,10 @@ constexpr std::array<SudokuDecision, 9 * 9 * 9> get_all_possible_moves() {
 }
 
 int main() {
-	constexpr int kMillisecondsPerMove = 1000;
-	thread::ThreadPool thread_pool;
+	constexpr int kMillisecondsPerMove = 10;
 	node::NodeManager<SudokuState> node_sudoku;
-	node_sudoku.get_config().depth = 10;
-	node_sudoku.get_config().node_limit = 1000000;
+	node_sudoku.get_config().depth = 7;
+	node_sudoku.get_config().node_limit = 100000;
 	Random rng(12345);
 	SudokuState sudoku_state;
 	size_t attempts = 0;
@@ -186,11 +188,13 @@ int main() {
 				new_state->board[move.x][move.y] = move.number;
 				node_sudoku.report_result(new_state->evaluate());
 			}
+			node_sudoku.increment_depth_counter();
 		}
 		auto best_state = node_sudoku.get_result();
 		++attempts;
 		std::cout << "Attempt #" << attempts << std::endl;
-		std::cout << "Total nodes generated: " << node_sudoku.get_total_node_count() << std::endl;
+		std::cout << "Total nodes in tree: " << node_sudoku.get_total_node_count() << std::endl;
+		std::cout << "Total searched: " << node_sudoku.get_total_searched_count() << std::endl;
 		if (best_state != nullptr) {
 			// sudoku_state.last_decision = sudoku_state.decision;
 			// sudoku_state.decision = best_state->decision;
