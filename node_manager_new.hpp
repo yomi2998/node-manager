@@ -10,7 +10,7 @@
 
 namespace node {
 	template <typename State>
-	class NodeTreeManager {
+	class NodeManager {
 	    private:
 		static_assert(sizeof(State) >= sizeof(size_t));
 
@@ -19,15 +19,18 @@ namespace node {
 			State state;
 
 			void mark_pruned(const bool pruned) {
-				size_t* prune_data = reinterpret_cast<size_t*>(state);
+				size_t* prune_data = reinterpret_cast<size_t*>(&state);
 				*prune_data = pruned ? std::numeric_limits<size_t>::max() : 0;
 			}
 
 			bool is_pruned() const {
-				return *reinterpret_cast<size_t*>(state) == std::numeric_limits<size_t>::max();
+				return *reinterpret_cast<const size_t*>(&state) == std::numeric_limits<size_t>::max();
 			}
 
 			const Node* get_first_parent() const {
+				if (parent == nullptr) {
+					return nullptr;
+				}
 				if (parent != nullptr && parent->parent == nullptr) {
 					return this;
 				}
@@ -39,7 +42,7 @@ namespace node {
 					return this;
 				}
 				assert(parent != nullptr);
-				return get_first_parent(n - 1);
+				return get_parent_at(n - 1);
 			}
 		};
 
@@ -107,7 +110,7 @@ namespace node {
 		};
 
 		struct NodeValueCompare {
-			static bool operator()(const Node& left, const Node& right) {
+			static bool operator()(const NodeValue& left, const NodeValue& right) {
 				return left.value < right.value;
 			}
 		};
@@ -116,7 +119,6 @@ namespace node {
 
 		struct NodeTreeConfig {
 			size_t depth = 7;
-			size_t search_buffer = 16;
 			size_t node_limit = 100000; // soft limit
 		};
 
@@ -141,7 +143,7 @@ namespace node {
 			}
 
 			Node* get_unsearched_node() {
-				Node* ret = unsearched.top();
+				Node* ret = unsearched.top().node;
 				unsearched.pop();
 				searched.emplace_back(ret);
 				return ret;
@@ -161,8 +163,9 @@ namespace node {
 				}
 				auto remove_orphans = [&memory]<typename Container, typename GetElement>(Container& container, GetElement get_element) {
 					for (size_t i = 0; i < container.size();) {
-						if (get_element(container[i])->is_pruned()) {
-							memory.deallocate(container[i]);
+						Node* node = get_element(container[i]);
+						if (node->is_pruned()) {
+							memory.deallocate(node);
 							container[i] = std::move(container.back());
 							container.pop_back();
 						} else {
@@ -171,21 +174,22 @@ namespace node {
 					}
 				};
 				if (!unsearched.empty()) {
-					std::vector<Node*> data = unsearched.export_container();
-					remove_orphans(data, [](const NodeValue& nv) { return nv.node; });
+					std::vector<NodeValue> data = unsearched.export_container();
+					remove_orphans(data, [](NodeValue& nv) { return nv.node; });
 					unsearched.import_container(std::move(data));
 				}
-				remove_orphans(searched, [](const Node* node) { return node; });
+				remove_orphans(searched, [](Node* node) { return node; });
 			}
 
 			void filter(const Node* survivor, NodeMemory& memory) {
 				if (empty()) {
 					return;
 				}
-				auto remove_losers = [&memory]<typename Container, typename GetElement>(Container& container, GetElement get_element) {
+				auto remove_losers = [&]<typename Container, typename GetElement>(Container& container, GetElement get_element) {
 					for (size_t i = 0; i < container.size();) {
-						if (get_element(container[i])->is_pruned()) {
-							memory.deallocate(container[i]);
+						Node* node = get_element(container[i]);
+						if (node != survivor) {
+							memory.deallocate(node);
 							container[i] = std::move(container.back());
 							container.pop_back();
 						} else {
@@ -194,11 +198,16 @@ namespace node {
 					}
 				};
 				if (!unsearched.empty()) {
-					std::vector<Node*> data = unsearched.export_container();
-					remove_losers(data, [](const NodeValue& nv) { return nv.node; });
+					std::vector<NodeValue> data = unsearched.export_container();
+					remove_losers(data, []( NodeValue& nv) { return nv.node; });
 					unsearched.import_container(std::move(data));
 				}
-				remove_losers(searched, [](const Node* node) { return node; });
+				remove_losers(searched, []( Node* node) { return node; });
+			}
+
+			void clear() {
+				unsearched.clear();
+				searched.clear();
 			}
 		};
 
@@ -211,7 +220,7 @@ namespace node {
 		size_t get_first_active_depth_index() const {
 			for (size_t i = 0; i < depths.size(); ++i) {
 				if (depths[i].size() > 1) {
-					return &depths[i];
+					return i;
 				}
 			}
 			return std::numeric_limits<size_t>::max();
@@ -221,7 +230,7 @@ namespace node {
 			for (size_t i = depths.size(); i-- > 0;) {
 				if (!depths[i].empty()) {
 					assert(depths[i].searched.empty());
-					return &depths[i];
+					return i;
 				}
 			}
 			return std::numeric_limits<size_t>::max();
@@ -232,7 +241,7 @@ namespace node {
 			if (index == std::numeric_limits<size_t>::max()) {
 				return nullptr;
 			}
-			return &depths[index].pending.top();
+			return depths[index].unsearched.top().node;
 		}
 
 		Node* get_root() {
@@ -241,7 +250,7 @@ namespace node {
 				return nullptr;
 			}
 			assert(searched_vec.size() == 1);
-			return &searched_vec[0];
+			return searched_vec[0];
 		}
 
 		void reset(const State& current_state) {
@@ -261,14 +270,14 @@ namespace node {
 			size_t last_active_depth_index = get_last_active_depth_index();
 
 			if (first_active_depth_index == last_active_depth_index) {
-				return false;;
+				return false;
 			}
 			if (last_active_depth_index == std::numeric_limits<size_t>::max()) {
 				throw std::runtime_error("node_limit is too low"); // maybe can remove if never triggers
 			}
 
 			size_t first_and_last_depth_index_diff = last_active_depth_index - first_active_depth_index;
-			const Node* best_node = depths[last_active_depth_index].pending.top();
+			const Node* best_node = depths[last_active_depth_index].unsearched.top().node;
 			best_node = best_node->get_parent_at(first_and_last_depth_index_diff);
 
 			NodeDepth& first_active_depth = depths[first_active_depth_index];
@@ -293,7 +302,7 @@ namespace node {
 			}
 			depths.resize(config.depth);
 			Node* root = get_root();
-			if (root == nullptr || root->child == nullptr) {
+			if (root == nullptr) {
 				reset(current_state);
 				return;
 			}
@@ -315,10 +324,9 @@ namespace node {
 
 		State* get_task() {
 			if (memory.is_limit_reached(config.node_limit)) {
-				prune();
-			}
-			if (memory.is_limit_reached(config.node_limit)) {
-				return nullptr;
+				if (!prune()) {
+					return nullptr;
+				}
 			}
 			size_t check_count = 0;
 			while (check_count != depths.size() && depths[node_cursor.depth].unsearched.empty()) {
@@ -343,6 +351,18 @@ namespace node {
 		void report_result(const double value) {
 			assert(node_cursor.depth + 1 != depths.size());
 			depths[node_cursor.depth + 1].push(node_cursor.allocated_node, value);
+		}
+
+		const State* get_result() const {
+			size_t last_depth_index = get_last_active_depth_index();
+			if (depths[last_depth_index].unsearched.empty()) {
+				return nullptr;
+			}
+			return &depths[last_depth_index].unsearched.top().node->get_first_parent()->state;
+		}
+
+		size_t get_total_node_count() const {
+			return memory.size();
 		}
 	};
 

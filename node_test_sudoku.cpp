@@ -1,4 +1,4 @@
-#include "node_manager.hpp"
+#include "node_manager_new.hpp"
 #include "thread.hpp"
 #include <array>
 #include <chrono>
@@ -157,58 +157,37 @@ constexpr std::array<SudokuDecision, 9 * 9 * 9> get_all_possible_moves() {
 }
 
 int main() {
-	constexpr int kMillisecondsPerMove = 10;
+	constexpr int kMillisecondsPerMove = 1000;
 	thread::ThreadPool thread_pool;
-	thread_pool.init(1);
-	ai::NodeTreeManager<SudokuState, SudokuHashFunc, CollisionFunc<SudokuState>> node_sudoku;
-	node_sudoku.get_config().depth = 5;
-	node_sudoku.get_config().depth_task_size = 1;
-	node_sudoku.get_config().beam_width = 250;
-	node_sudoku.get_config().award_width = 250;
-	node_sudoku.get_config().prune_width = 500;
+	node::NodeManager<SudokuState> node_sudoku;
+	node_sudoku.get_config().depth = 10;
 	node_sudoku.get_config().node_limit = 1000000;
 	Random rng(12345);
 	SudokuState sudoku_state;
 	size_t attempts = 0;
 	while (!sudoku_state.is_solved()) {
-		if (!node_sudoku.try_advance()) {
-			node_sudoku.reset(sudoku_state, thread_pool.size());
-		}
+		node_sudoku.prepare_tree(sudoku_state);
 		auto now = std::chrono::high_resolution_clock::now();
-		 while (std::chrono::high_resolution_clock::now() - now < std::chrono::milliseconds(kMillisecondsPerMove)) {
-		//while(true){
-			if (node_sudoku.is_search_complete()) {
+		while (std::chrono::high_resolution_clock::now() - now < std::chrono::milliseconds(kMillisecondsPerMove)) {
+			//while(true){
+			auto parent_state = node_sudoku.get_task();
+			if (parent_state == nullptr) {
 				break;
 			}
-			auto threads = node_sudoku.get_tasks();
-			for (auto& thread : threads) {
-				auto do_tasks = [local_thread = std::move(thread), &node_sudoku]() mutable {
-					for (auto& task : local_thread.tasks) {
-						for (auto& parent : task.nodes) {
-							constexpr auto all_moves = get_all_possible_moves();
-							for (const auto& move : all_moves) {
-								if (parent->state.board[move.x][move.y] == move.number) {
-									continue; // skip if already set
-								}
-								auto node = node_sudoku.allocate_new_node(local_thread.thread_id, parent);
-								node->state = parent->state;
-								node->state.last_decision = node->state.decision;
-								node->state.decision = move;
-								node->state.board[move.x][move.y] = move.number;
-								double value = node->state.evaluate();
-								node_sudoku.push_new_node(task.depth + 1, node, value);
-							}
-						}
-					}
-				};
-
-				do_tasks();
-				//thread_pool.enqueue(do_tasks);
+			constexpr auto all_moves = get_all_possible_moves();
+			for (const auto& move : all_moves) {
+				if (parent_state->board[move.x][move.y] == move.number) {
+					continue; // skip if already set
+				}
+				auto new_state = node_sudoku.get_new_state();
+				*new_state = *parent_state;
+				new_state->last_decision = parent_state->decision;
+				new_state->decision = move;
+				new_state->board[move.x][move.y] = move.number;
+				node_sudoku.report_result(new_state->evaluate());
 			}
-			//thread_pool.wait();
-			node_sudoku.finalize();
 		}
-		auto best_state = node_sudoku.get_best_state();
+		auto best_state = node_sudoku.get_result();
 		++attempts;
 		std::cout << "Attempt #" << attempts << std::endl;
 		std::cout << "Total nodes generated: " << node_sudoku.get_total_node_count() << std::endl;
@@ -216,7 +195,8 @@ int main() {
 			// sudoku_state.last_decision = sudoku_state.decision;
 			// sudoku_state.decision = best_state->decision;
 			// sudoku_state.board[best_state->decision.x][best_state->decision.y] = best_state->decision.number;
-			sudoku_state = *best_state;
+			sudoku_state.board[best_state->decision.x][best_state->decision.y] = best_state->decision.number;
+			assert(memcmp(sudoku_state.board, best_state->board, sizeof(sudoku_state.board)) == 0);
 			std::cout << "Applied decision: x: " << static_cast<int>(best_state->decision.x)
 			          << ";y: " << static_cast<int>(best_state->decision.y)
 			          << ";number: " << static_cast<int>(best_state->decision.number) << std::endl;
