@@ -1,23 +1,10 @@
-#include "node_manager.hpp"
+#include "include/node_manager.hpp"
+#include "include/third_party/xxHash/xxhash.h"
 #include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <iostream>
-
-class Random {
-	uint64_t state;
-
-    public:
-	Random(uint64_t seed) : state(seed) {}
-
-	uint32_t next_uint32() {
-		state ^= state >> 12;
-		state ^= state << 25;
-		state ^= state >> 27;
-		return static_cast<uint32_t>((state * 2685821657736338717ULL) >> 32);
-	}
-};
 
 struct SudokuDecision {
 	uint8_t x;
@@ -29,7 +16,6 @@ struct SudokuState {
 	// col, row
 	uint8_t board[9][9] = {};
 	SudokuDecision decision = {};
-	SudokuDecision last_decision = {};
 
 	bool operator==(const SudokuState& other) const {
 		return std::memcmp(board, other.board, sizeof(board)) == 0;
@@ -113,24 +99,14 @@ struct SudokuState {
 			score += get_row_match_count(i);
 			score += get_column_match_count(i);
 		}
-		score -= get_zero_count() * 99999;
-		if (std::memcmp(&decision, &last_decision, sizeof(SudokuDecision)) == 0) {
-			score = -99999; // discourage repeating same decision
-		}
+		score -= get_zero_count();
 		return score;
 	}
 };
 
 struct SudokuHashFunc {
 	uint64_t operator()(const SudokuState& state) const {
-		uint64_t hash = 0xcbf29ce484222325;
-		for (size_t i = 0; i < 9; ++i) {
-			for (size_t j = 0; j < 9; ++j) {
-				hash ^= state.board[i][j];
-				hash *= 0x100000001b3;
-			}
-		}
-		return hash;
+		return XXH3_64bits(state.board, sizeof(state.board));
 	}
 };
 
@@ -160,11 +136,10 @@ constexpr std::array<SudokuDecision, 9 * 9 * 9> get_all_possible_moves() {
 }
 
 int main() {
-	constexpr int kMillisecondsPerMove = 10;
-	noir::NodeManager<SudokuState> node_sudoku;
+	constexpr int kMillisecondsPerMove = 25;
+	noir::NodeManager<SudokuState, CollisionFunc<SudokuState>, SudokuHashFunc> node_sudoku;
 	node_sudoku.get_config().depth = 7;
 	node_sudoku.get_config().node_limit = 100000;
-	Random rng(12345);
 	SudokuState sudoku_state;
 	size_t attempts = 0;
 	while (!sudoku_state.is_solved()) {
@@ -178,14 +153,13 @@ int main() {
 			}
 			constexpr auto all_moves = get_all_possible_moves();
 			for (const auto& move : all_moves) {
-				if (parent_state->board[move.x][move.y] == move.number) {
-					continue; // skip if already set
-				}
 				auto new_state = node_sudoku.get_new_state();
 				*new_state = *parent_state;
-				new_state->last_decision = parent_state->decision;
 				new_state->decision = move;
 				new_state->board[move.x][move.y] = move.number;
+				if (!node_sudoku.verify_state()) {
+					continue;
+				}
 				node_sudoku.report_result(new_state->evaluate());
 			}
 			node_sudoku.increment_depth_counter();
@@ -195,6 +169,7 @@ int main() {
 		std::cout << "Attempt #" << attempts << std::endl;
 		std::cout << "Total nodes in tree: " << node_sudoku.get_total_node_count() << std::endl;
 		std::cout << "Total searched: " << node_sudoku.get_total_searched_count() << std::endl;
+		std::cout << "Total collisions: " << node_sudoku.get_total_collision_count() << std::endl;
 		if (best_state != nullptr) {
 			// sudoku_state.last_decision = sudoku_state.decision;
 			// sudoku_state.decision = best_state->decision;

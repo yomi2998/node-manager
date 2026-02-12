@@ -5,4 +5,5 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(node_test_sudoku
     node_test_sudoku.cpp
+    include/third_party/xxHash/xxhash.c
 )

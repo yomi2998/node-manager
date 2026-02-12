@@ -1,15 +1,18 @@
 #pragma once
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <limits>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
 #include "priority_queue.hpp"
+#include "third_party/unordered_dense/unordered_dense.h"
 
 namespace noir {
-	template <typename State>
+	template <typename State, typename StateCompare, typename StateHash>
 	class NodeManager {
 	    private:
 		static_assert(sizeof(State) >= sizeof(size_t));
@@ -212,6 +215,11 @@ namespace noir {
 		std::vector<NodeDepth> depths;
 		NodeTreeConfig config;
 		size_t total_searched;
+		size_t total_collision;
+
+		std::unordered_map<uint64_t, Node*> transposition_table;
+		StateCompare state_compare;
+		StateHash state_hash;
 
 		size_t get_first_active_depth_index() const {
 			for (size_t i = 0; i < depths.size(); ++i) {
@@ -236,6 +244,9 @@ namespace noir {
 			if (index == std::numeric_limits<size_t>::max()) {
 				return nullptr;
 			}
+			if (depths[index].unsearched.empty()) {
+				return nullptr;
+			}
 			return depths[index].unsearched.top().node;
 		}
 
@@ -250,6 +261,7 @@ namespace noir {
 
 		void reset(const State& current_state) {
 			memory.reset();
+			transposition_table.clear();
 			for (NodeDepth& depth : depths) {
 				depth.searched.clear();
 				depth.unsearched.clear();
@@ -260,10 +272,27 @@ namespace noir {
 			depths.front().push(root, 0);
 		}
 
+		void cleanup(const size_t start, const size_t end) {
+			for (size_t i = start; i < end; ++i) {
+				NodeDepth& depth = depths[i];
+				depth.cleanup(memory);
+			}
+			for (auto it = transposition_table.begin(); it != transposition_table.end();) {
+				if (it->second->pruned) {
+					it = transposition_table.erase(it);
+				} else {
+					++it;
+				}
+			}
+		}
+
 		bool prune() {
 			size_t first_active_depth_index = get_first_active_depth_index();
 			size_t last_active_depth_index = get_last_active_depth_index();
 
+			if (first_active_depth_index != 1) { // prevent over pruning
+				return false;
+			}
 			if (first_active_depth_index == last_active_depth_index) {
 				return false;
 			}
@@ -278,11 +307,13 @@ namespace noir {
 			NodeDepth& first_active_depth = depths[first_active_depth_index];
 			first_active_depth.filter(best_node, memory);
 
-			for (size_t i = first_active_depth_index; i <= last_active_depth_index; ++i) {
-				NodeDepth& depth = depths[i];
-				depth.cleanup(memory);
-			}
+			cleanup(first_active_depth_index, last_active_depth_index + 1);
 			return true;
+		}
+
+		void reset_metrics() {
+			total_searched = 0;
+			total_collision = 0;
 		}
 
 	    public:
@@ -290,8 +321,21 @@ namespace noir {
 			return config;
 		}
 
+		bool verify_state() {
+			if (node_cursor.allocated_node == nullptr || node_cursor.allocated_node->pruned) {
+				return false;
+			}
+			uint64_t hash = state_hash(node_cursor.allocated_node->state);
+			if (!transposition_table.try_emplace(hash, node_cursor.allocated_node).second) {
+				++total_collision;
+				memory.deallocate(node_cursor.allocated_node);
+				return false;
+			}
+			return true;
+		}
+
 		void prepare_tree(const State& current_state) {
-			total_searched = 0;
+			reset_metrics();
 			if (depths.size() <= config.depth) {
 				reset(current_state);
 				return;
@@ -303,8 +347,12 @@ namespace noir {
 				return;
 			}
 			const Node* best_leaf = get_best_node();
+			if (best_leaf == nullptr) {
+				reset(current_state);
+				return;
+			}
 			const Node* best_parent = best_leaf->get_first_parent();
-			if (best_parent->state != current_state) {
+			if (!state_compare(best_parent->state, current_state)) {
 				reset(current_state);
 				return;
 			}
@@ -315,9 +363,7 @@ namespace noir {
 			depths.front().filter(best_parent, memory);
 			depths.front().make_root();
 			depths.back().clear();
-			for (size_t i = 1; i < depths.size() - 1; ++i) {
-				depths[i].cleanup(memory);
-			}
+			cleanup(1, depths.size() - 1);
 		}
 
 		void increment_depth_counter() {
@@ -370,6 +416,10 @@ namespace noir {
 
 		size_t get_total_searched_count() const {
 			return total_searched;
+		}
+
+		size_t get_total_collision_count() const {
+			return total_collision;
 		}
 	};
 
