@@ -140,6 +140,7 @@ int main() {
 	noir::NodeManager<SudokuState, CollisionFunc<SudokuState>, SudokuHashFunc> node_sudoku;
 	node_sudoku.get_config().depth = 7;
 	node_sudoku.get_config().node_limit = 100000;
+	node_sudoku.get_config().prune_depth_limit = 0;
 	SudokuState sudoku_state;
 	size_t attempts = 0;
 	while (!sudoku_state.is_solved()) {

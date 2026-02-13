@@ -113,6 +113,7 @@ namespace noir {
 
 		struct NodeTreeConfig {
 			size_t depth = 7;
+			size_t prune_depth_limit = 0;
 			size_t node_limit = 100000; // soft limit
 		};
 
@@ -286,10 +287,14 @@ namespace noir {
 		}
 
 		bool prune() {
+			if (config.prune_depth_limit == 0) {
+				return false;
+			}
+
 			size_t first_active_depth_index = get_first_active_depth_index();
 			size_t last_active_depth_index = get_last_active_depth_index();
 
-			if (first_active_depth_index != 1) { // prevent over pruning
+			if (first_active_depth_index > config.prune_depth_limit) {
 				return false;
 			}
 			if (first_active_depth_index == last_active_depth_index) {
