@@ -379,11 +379,13 @@ namespace noir {
 				}
 			}
 			size_t check_count = 0;
+			size_t last_depth_counter = node_cursor.depth;
 			while (check_count != depths.size() && depths[node_cursor.depth].unsearched.empty()) {
 				++check_count;
 				increment_depth_counter();
 			}
 			if (check_count == depths.size()) {
+				node_cursor.depth = last_depth_counter;
 				return nullptr;
 			}
 			node_cursor.cursor = depths[node_cursor.depth].get_unsearched_node();
@@ -407,6 +409,14 @@ namespace noir {
 				return nullptr;
 			}
 			return &depths[last_depth_index].unsearched.top().node->get_first_parent()->state;
+		}
+
+		bool are_depths_populated() const {
+			size_t last_depth_index = get_last_active_depth_index();
+			if (last_depth_index == depths.size() - 1) {
+				return true;
+			}
+			return depths[last_depth_index].unsearched.empty();
 		}
 
 		size_t get_total_node_count() const {

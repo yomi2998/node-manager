@@ -145,8 +145,10 @@ int main() {
 	while (!sudoku_state.is_solved()) {
 		node_sudoku.prepare_tree(sudoku_state);
 		auto now = std::chrono::high_resolution_clock::now();
-		while (std::chrono::high_resolution_clock::now() - now < std::chrono::milliseconds(kMillisecondsPerMove)) {
-			//while(true){
+		// exit conditions:
+		// 1. task is nullptr
+		// 2. time limit exceeded AND depths are populated
+		do {
 			auto parent_state = node_sudoku.get_task();
 			if (parent_state == nullptr) {
 				break;
@@ -163,7 +165,8 @@ int main() {
 				node_sudoku.report_result(new_state->evaluate());
 			}
 			node_sudoku.increment_depth_counter();
-		}
+		} while (std::chrono::high_resolution_clock::now() - now < std::chrono::milliseconds(kMillisecondsPerMove) || !node_sudoku.are_depths_populated());
+			//while(true);
 		auto best_state = node_sudoku.get_result();
 		++attempts;
 		std::cout << "Attempt #" << attempts << std::endl;
