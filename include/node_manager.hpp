@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "priority_queue.hpp"
-#include "third_party/unordered_dense/unordered_dense.h"
 
 namespace noir {
 	template <typename State, typename StateCompare, typename StateHash>
