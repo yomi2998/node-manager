@@ -10,7 +10,7 @@
 
 #include "priority_queue.hpp"
 
-namespace noir {
+namespace noir::pdtt {
 	template <typename State, typename StateEqual, typename StateHash>
 	class NodeManager {
 	    private:
@@ -126,6 +126,7 @@ namespace noir {
 		struct NodeDepth {
 			NodeValuePriorityQueue unsearched;
 			std::vector<Node*> searched;
+			std::unordered_map<uint64_t, Node*> transposition_table;
 
 			void make_root() {
 				assert(size() == 1);
@@ -177,6 +178,13 @@ namespace noir {
 					unsearched.import_container(std::move(data));
 				}
 				remove_orphans(searched, [](Node* node) { return node; });
+				for (auto it = transposition_table.begin(); it != transposition_table.end();) {
+					if (it->second->pruned) {
+						it = transposition_table.erase(it);
+					} else {
+						++it;
+					}
+				}
 			}
 
 			void filter(const Node* survivor, NodeMemory& memory) {
@@ -201,11 +209,19 @@ namespace noir {
 					unsearched.import_container(std::move(data));
 				}
 				remove_losers(searched, [](Node* node) { return node; });
+				for (auto it = transposition_table.begin(); it != transposition_table.end();) {
+					if (it->second != survivor) {
+						it = transposition_table.erase(it);
+					} else {
+						++it;
+					}
+				}
 			}
 
 			void clear() {
 				unsearched.clear();
 				searched.clear();
+				transposition_table.clear();
 			}
 		};
 
@@ -217,7 +233,6 @@ namespace noir {
 		size_t total_searched;
 		size_t total_collision;
 
-		std::unordered_map<uint64_t, Node*> transposition_table;
 		StateEqual state_equal;
 		StateHash state_hash;
 
@@ -261,10 +276,10 @@ namespace noir {
 
 		void reset(const State& current_state) {
 			memory.reset();
-			transposition_table.clear();
 			for (NodeDepth& depth : depths) {
 				depth.searched.clear();
 				depth.unsearched.clear();
+				depth.transposition_table.clear();
 			}
 			depths.resize(config.depth + 1);
 			Node* root = memory.allocate(nullptr);
@@ -276,13 +291,6 @@ namespace noir {
 			for (size_t i = start; i < end; ++i) {
 				NodeDepth& depth = depths[i];
 				depth.cleanup(memory);
-			}
-			for (auto it = transposition_table.begin(); it != transposition_table.end();) {
-				if (it->second->pruned) {
-					it = transposition_table.erase(it);
-				} else {
-					++it;
-				}
 			}
 		}
 
@@ -311,7 +319,7 @@ namespace noir {
 			NodeDepth& first_active_depth = depths[first_active_depth_index];
 			first_active_depth.filter(best_node, memory);
 
-			cleanup(first_active_depth_index, last_active_depth_index + 1);
+			cleanup(first_active_depth_index + 1, last_active_depth_index + 1);
 			return true;
 		}
 
@@ -330,7 +338,7 @@ namespace noir {
 				return false;
 			}
 			uint64_t hash = state_hash(node_cursor.allocated_node->state);
-			if (!transposition_table.try_emplace(hash, node_cursor.allocated_node).second) {
+			if (!depths[node_cursor.depth].transposition_table.try_emplace(hash, node_cursor.allocated_node).second) {
 				++total_collision;
 				memory.deallocate(node_cursor.allocated_node);
 				return false;
@@ -361,6 +369,7 @@ namespace noir {
 				return;
 			}
 			memory.deallocate(root);
+			auto front_depth = std::move(depths.front());
 			for (size_t i = 0; i < depths.size() - 1; ++i) {
 				depths[i] = std::move(depths[i + 1]);
 			}

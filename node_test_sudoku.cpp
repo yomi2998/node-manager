@@ -1,4 +1,4 @@
-#include "include/node_manager.hpp"
+#include "include/ctt_node_manager.hpp"
 #include "include/third_party/xxHash/xxhash.h"
 #include <array>
 #include <chrono>
@@ -137,7 +137,7 @@ constexpr std::array<SudokuDecision, 9 * 9 * 9> get_all_possible_moves() {
 
 int main() {
 	constexpr int kMillisecondsPerMove = 25;
-	noir::NodeManager<SudokuState, CollisionFunc<SudokuState>, SudokuHashFunc> node_sudoku;
+	noir::ctt::NodeManager<SudokuState, CollisionFunc<SudokuState>, SudokuHashFunc> node_sudoku;
 	node_sudoku.get_config().depth = 7;
 	node_sudoku.get_config().node_limit = 100000;
 	node_sudoku.get_config().prune_depth_limit = 0;
