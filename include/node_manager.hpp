@@ -11,7 +11,7 @@
 #include "priority_queue.hpp"
 
 namespace noir {
-	template <typename State, typename StateCompare, typename StateHash>
+	template <typename State, typename StateEqual, typename StateHash>
 	class NodeManager {
 	    private:
 		static_assert(sizeof(State) >= sizeof(size_t));
@@ -218,7 +218,7 @@ namespace noir {
 		size_t total_collision;
 
 		std::unordered_map<uint64_t, Node*> transposition_table;
-		StateCompare state_compare;
+		StateEqual state_equal;
 		StateHash state_hash;
 
 		size_t get_first_active_depth_index() const {
@@ -356,7 +356,7 @@ namespace noir {
 				return;
 			}
 			const Node* best_parent = best_leaf->get_first_parent();
-			if (!state_compare(best_parent->state, current_state)) {
+			if (!state_equal(best_parent->state, current_state)) {
 				reset(current_state);
 				return;
 			}
